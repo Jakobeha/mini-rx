@@ -2,10 +2,11 @@
 name = "mini-rx"
 version = "0.1.0"
 authors = ["jakobeha <jakobeha@fastmail.com>"]
-description = "bare-bones Reactive programming using a central data dependency graph"
+description = "bare-bones \"reactive programming\" (change propogation) using a central data dependency graph"
 homepage = "https://crates.io/crates/mini-rx"
 documentation = "https://docs.rs/mini-rx"
 repository = "https://github.com/jakobeha/mini-rx"
+readme = "README.md"
 license = "Apache-2.0"
 keywords = ["reactive", "frp", "signal"]
 edition = "2021"
