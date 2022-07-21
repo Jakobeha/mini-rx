@@ -65,6 +65,9 @@ pub(crate) enum CurrentOrNext<'a, T> {
 }
 
 impl<'c> RxDAGElem<'c> {
+    /// Recomputes this one element.
+    /// If it's a node, updates the value which gets returned when you call [Var::get] or [CRx::get].
+    /// If it's an edge, reruns `compute` if any of its inputs changed.
     pub(crate) fn recompute(&mut self, index: usize, before: &[RxDAGElem<'c>], after: &[RxDAGElem<'c>], graph_id: RxDAGUid<'c>) {
         match self {
             RxDAGElem::Node(x) => x.recompute(),

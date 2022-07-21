@@ -1,5 +1,6 @@
 use std::marker::PhantomData;
 
+#[doc(hidden)]
 pub struct CloneSetFn<T: Clone, U, F: Fn(&mut T, U)>(F, PhantomData<(T, U)>);
 
 impl<T: Clone, U, F: Fn(&mut T, U)> CloneSetFn<T, U, F> {

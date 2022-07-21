@@ -1,6 +1,6 @@
 [package]
 name = "mini-rx"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["jakobeha <jakobeha@fastmail.com>"]
 description = "bare-bones \"reactive programming\" (change propogation) using a central data dependency graph"
 homepage = "https://crates.io/crates/mini-rx"
