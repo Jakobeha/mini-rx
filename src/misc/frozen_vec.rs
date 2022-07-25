@@ -1,6 +1,7 @@
 //! Copied from [elsa FrozenVec](https://docs.rs/elsa/latest/src/elsa/vec.rs.html#10-14),
 //! modified.
 
+use std::alloc::{Allocator, Global};
 use std::cell::UnsafeCell;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
@@ -18,7 +19,7 @@ use crate::misc::stable_deref2::StableDeref2;
 ///
 /// Furthermore, you can get the underlying `&mut` vector with mutable access, because that ensures
 /// that there are no active shared references to the vector's elements.
-pub struct FrozenVec<T>(UnsafeCell<Vec<T>>);
+pub struct FrozenVec<T, A: Allocator = Global>(UnsafeCell<Vec<T, A>>);
 
 // safety: UnsafeCell implies !Sync
 
@@ -26,6 +27,13 @@ impl<T> FrozenVec<T> {
     /// Constructs a new, empty vector.
     pub fn new() -> Self {
         Self(UnsafeCell::new(Vec::new()))
+    }
+}
+
+impl<T, A: Allocator> FrozenVec<T, A> {
+    /// Constructs a new, empty vector.
+    pub fn new_in(alloc: A) -> Self {
+        Self(UnsafeCell::new(Vec::new_in(alloc)))
     }
 
     /// Appends an element to the back of the vector.
@@ -37,7 +45,7 @@ impl<T> FrozenVec<T> {
     }
 }
 
-impl<T: StableDeref2> FrozenVec<T> {
+impl<T: StableDeref2, A: Allocator> FrozenVec<T, A> {
     // these should never return &T
     // these should never delete any entries
 
@@ -202,22 +210,22 @@ impl<T: StableDeref2> FrozenVec<T> {
     // TODO add more
 }
 
-impl<T> Default for FrozenVec<T> {
+impl<T, A: Allocator> Default for FrozenVec<T, A> {
     fn default() -> Self {
         FrozenVec::new()
     }
 }
 
-impl<T> From<Vec<T>> for FrozenVec<T> {
+impl<T, A: Allocator> From<Vec<T, A>> for FrozenVec<T, A> {
     fn from(vec: Vec<T>) -> Self {
         Self(UnsafeCell::new(vec))
     }
 }
 
-impl<A> FromIterator<A> for FrozenVec<A> {
+impl<I> FromIterator<I> for FrozenVec<I> {
     fn from_iter<T>(iter: T) -> Self
         where
-            T: IntoIterator<Item = A>,
+            T: IntoIterator<Item =I>,
     {
         let vec: Vec<_> = iter.into_iter().collect();
         vec.into()
@@ -227,13 +235,14 @@ impl<A> FromIterator<A> for FrozenVec<A> {
 /// Iterator over FrozenVec, obtained via `.iter()`
 ///
 /// It is safe to push to the vector during iteration
-pub struct Iter<'a, T> {
-    vec: &'a FrozenVec<T>,
+pub struct Iter<'a, T, A: Allocator = Global> {
+    vec: &'a FrozenVec<T, A>,
     idx: usize,
 }
 
-impl<'a, T: StableDeref2> Iterator for Iter<'a, T> {
+impl<'a, T: StableDeref2, A: Allocator> Iterator for Iter<'a, T, A> {
     type Item = T::Target<'a>;
+
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(ret) = self.vec.get(self.idx) {
             self.idx += 1;
@@ -248,11 +257,11 @@ impl<'a, T: StableDeref2> Iterator for Iter<'a, T> {
     }
 }
 
-impl<'a, T: StableDeref2> IntoIterator for &'a FrozenVec<T> {
+impl<'a, T: StableDeref2, A: Allocator> IntoIterator for &'a FrozenVec<T, A> {
     type Item = T::Target<'a>;
-    type IntoIter = Iter<'a, T>;
+    type IntoIter = Iter<'a, T, A>;
 
-    fn into_iter(self) -> Iter<'a, T> {
+    fn into_iter(self) -> Iter<'a, T, A> {
         Iter { vec: self, idx: 0 }
     }
 }
@@ -314,22 +323,16 @@ mod tests {
     }
 }
 
-// impl<T: StableDeref2> Debug for FrozenVec<T> where for<'a> T::Target<'a>: Debug
-impl<'a, T: StableDeref2 + 'a> Debug for FrozenVec<T> where T::Target<'a>: Debug {
+impl<T: StableDeref2, A: Allocator> Debug for FrozenVec<T, A> where for<'a> T::Target<'a>: Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // This is technically unsound because 'a is an existential, not a forall,
-        // but in practice I assume no-one will actually implement for a bad 'a
-        let this = unsafe { transmute::<&Self, &'a Self>(&self) };
+        let this = unsafe { transmute::<&Self, &'static Self>(&self) };
         f.debug_list().entries(this.iter()).finish()
     }
 }
 
-// impl<'a, T: StableDeref2> Debug for FrozenSlice<'a, T> where for<'b> T::Target<'b>: Debug
-impl<'a: 'b, 'b, T: StableDeref2 + 'b> Debug for FrozenSlice<'a, T> where T::Target<'b>: Debug {
+impl<'a, T: StableDeref2> Debug for FrozenSlice<'a, T> where for<'b> T::Target<'b>: Debug {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        // This is technically unsound because 'a is an existential, not a forall,
-        // but in practice I assume no-one will actually implement for a bad 'a
-        let this = unsafe { transmute::<&Self, &'a Self>(&self) };
+        let this = unsafe { transmute::<&Self, &'static Self>(&self) };
         f.debug_list().entries(this.iter()).finish()
     }
 }
@@ -356,7 +359,7 @@ impl<'a, T: StableDeref2> FrozenSlice<'a, T> {
     // TODO add more
 }
 
-impl<'a, T> From<&'a FrozenVec<T>> for FrozenSlice<'a, T> {
+impl<'a, T, A: Allocator> From<&'a FrozenVec<T, A>> for FrozenSlice<'a, T> {
     /// Get a `FrozenSlice`, which is the "slice" equivalent of a `FrozenVec`.
     /// This is safe, because you can only access the `FrozenSlice` like a frozen vector.
     /// This is useful, because you can also convert regular slices into `FrozenSlice`.

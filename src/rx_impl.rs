@@ -1,5 +1,7 @@
+use std::alloc::{Allocator, Global};
 use std::cell::Cell;
 use std::fmt::{Debug, Formatter};
+use std::marker::PhantomData;
 use std::mem::{MaybeUninit, size_of, transmute};
 use crate::misc::stable_deref2::{Deref2, StableDeref2};
 use crate::misc::frozen_vec::FrozenSlice;
@@ -8,23 +10,23 @@ use crate::dag::{RxInput, RxSubDAG};
 use crate::dag_uid::RxDAGUid;
 
 #[derive(Debug)]
-pub(crate) enum RxDAGElem<'c> {
-    Node(Box<Rx<'c>>),
-    Edge(Box<RxEdge<'c>>)
+pub(crate) enum RxDAGElem<'c, A: Allocator> {
+    Node(Box<Rx<'c, A>, A>),
+    Edge(Box<RxEdge<'c, A>, A>)
 }
 
 #[derive(Debug)]
-pub(crate) enum RxDAGElemRef<'a, 'c> {
-    Node(&'a Rx<'c>),
-    Edge(&'a RxEdge<'c>)
+pub(crate) enum RxDAGElemRef<'a, 'c, A: Allocator> {
+    Node(&'a Rx<'c, A>),
+    Edge(&'a RxEdge<'c, A>)
 }
 
-pub(crate) type Rx<'c> = dyn RxTrait + 'c;
+pub(crate) type Rx<'c, A> = dyn RxTrait<A> + 'c;
 assert_is_covariant!((Rx<'c>) over 'c);
-pub(crate) type RxEdge<'c> = dyn RxEdgeTrait + 'c;
+pub(crate) type RxEdge<'c, A> = dyn RxEdgeTrait<A> + 'c;
 assert_is_covariant!((RxEdge<'c>) over 'c);
 
-pub(crate) trait RxTrait: Debug {
+pub(crate) trait RxTrait<A: Allocator>: Debug {
     fn post_read(&self) -> bool;
 
     fn recompute(&mut self);
@@ -36,27 +38,28 @@ pub(crate) trait RxTrait: Debug {
     unsafe fn _set_dyn(&self, ptr: *mut MaybeUninit<()>, size: usize);
 }
 
-pub(crate) struct RxImpl<T> {
+pub(crate) struct RxImpl<T, A: Allocator> {
     current: T,
     next: Cell<Option<T>>,
     // Rx flags (might have same flags for a group to reduce traversing all Rxs)
     did_read: Cell<bool>,
-    did_recompute: bool
+    did_recompute: bool,
+    phantom: PhantomData<A>
 }
 
-// trait RxEdgeTrait<cov 'c>: Debug
-pub(crate) trait RxEdgeTrait: Debug {
-    // fn recompute(&mut self, index: usize, before: &[RxDAGElem<'c>], after: &[RxDAGElem<'c>], graph_id: RxDAGUid<'c>);
+// trait RxEdgeTrait<cov 'c, A: Allocator>: Debug
+pub(crate) trait RxEdgeTrait<A: Allocator>: Debug {
+    // fn recompute(&mut self, index: usize, before: &[RxDAGElem<'c, A>], after: &[RxDAGElem<'c, A>], graph_id: RxDAGUid<'c, A>);
     // 'c2 must outlive 'c, this is a workaround beause there aren't covariant trait lifetime parameters
-    fn recompute<'c2>(&mut self, index: usize, before: &[RxDAGElem<'c2>], after: &[RxDAGElem<'c2>], graph_id: RxDAGUid<'c2>);
+    fn recompute<'c2>(&mut self, index: usize, before: &[RxDAGElem<'c2, A>], after: &[RxDAGElem<'c2, A>], graph_id: RxDAGUid<'c2, A>);
 }
 
-pub(crate) struct RxEdgeImpl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'c>>) + 'c> {
+pub(crate) struct RxEdgeImpl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c, A>, &mut dyn Iterator<Item=&Rx<'c, A>>) + 'c, A: Allocator> {
     // Takes current of input values (first argument) and sets next of output values (second argument).
     compute: F,
     num_outputs: usize,
     input_backwards_offsets: Vec<usize>,
-    cached_inputs: Vec<*const Rx<'c>>
+    cached_inputs: Vec<*const Rx<'c, A>>
 }
 
 pub(crate) enum CurrentOrNext<'a, T> {
@@ -64,11 +67,11 @@ pub(crate) enum CurrentOrNext<'a, T> {
     Next(T)
 }
 
-impl<'c> RxDAGElem<'c> {
+impl<'c, A: Allocator> RxDAGElem<'c, A> {
     /// Recomputes this one element.
     /// If it's a node, updates the value which gets returned when you call [Var::get] or [CRx::get].
     /// If it's an edge, reruns `compute` if any of its inputs changed.
-    pub(crate) fn recompute(&mut self, index: usize, before: &[RxDAGElem<'c>], after: &[RxDAGElem<'c>], graph_id: RxDAGUid<'c>) {
+    pub(crate) fn recompute(&mut self, index: usize, before: &[RxDAGElem<'c, A>], after: &[RxDAGElem<'c, A>], graph_id: RxDAGUid<'c, A>) {
         match self {
             RxDAGElem::Node(x) => x.recompute(),
             // this is ok because this allows an arbitrary lifetime, but we pass 'c which is required
@@ -83,7 +86,7 @@ impl<'c> RxDAGElem<'c> {
         }
     }
 
-    pub(crate) fn as_node(&self) -> Option<&Rx<'c>> {
+    pub(crate) fn as_node(&self) -> Option<&Rx<'c, A>> {
         match self {
             RxDAGElem::Node(x) => Some(x.as_ref()),
             _ => None
@@ -91,7 +94,7 @@ impl<'c> RxDAGElem<'c> {
     }
 }
 
-impl<'a, 'c> RxDAGElemRef<'a, 'c> {
+impl<'a, 'c, A: Allocator> RxDAGElemRef<'a, 'c, A> {
     pub(crate) fn post_read(self) -> bool {
         match self {
             RxDAGElemRef::Node(node) => node.post_read(),
@@ -100,7 +103,7 @@ impl<'a, 'c> RxDAGElemRef<'a, 'c> {
     }
 
     //noinspection RsSelfConvention because this is itself a reference
-    pub(crate) fn as_node(self) -> Option<&'a Rx<'c>> {
+    pub(crate) fn as_node(self) -> Option<&'a Rx<'c, A>> {
         match self {
             RxDAGElemRef::Node(x) => Some(x),
             _ => None
@@ -108,13 +111,14 @@ impl<'a, 'c> RxDAGElemRef<'a, 'c> {
     }
 }
 
-impl<T> RxImpl<T> {
+impl<T, A: Allocator> RxImpl<T, A> {
     pub(crate) fn new(init: T) -> Self {
         Self {
             current: init,
             next: Cell::new(None),
             did_read: Cell::new(false),
-            did_recompute: false
+            did_recompute: false,
+            phantom: PhantomData
         }
     }
 
@@ -138,7 +142,7 @@ impl<T> RxImpl<T> {
     }
 }
 
-impl<T> RxTrait for RxImpl<T> {
+impl<T, A: Allocator> RxTrait<A> for RxImpl<T, A> {
     fn post_read(&self) -> bool {
         self.did_read.take()
     }
@@ -185,8 +189,8 @@ impl<T> RxTrait for RxImpl<T> {
     }
 }
 
-impl<'c> Deref2 for RxDAGElem<'c> {
-    type Target<'a> = RxDAGElemRef<'a, 'c> where Self: 'a;
+impl<'c, A: Allocator> Deref2 for RxDAGElem<'c, A> {
+    type Target<'a> = RxDAGElemRef<'a, 'c, A> where Self: 'a;
 
     fn deref2(&self) -> Self::Target<'_> {
         match self {
@@ -196,9 +200,9 @@ impl<'c> Deref2 for RxDAGElem<'c> {
     }
 }
 
-unsafe impl<'c> StableDeref2 for RxDAGElem<'c> {}
+unsafe impl<'c, A: Allocator> StableDeref2 for RxDAGElem<'c, A> {}
 
-impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'c>>) + 'c> RxEdgeImpl<'c, F> {
+impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c, A>, &mut dyn Iterator<Item=&Rx<'c, A>>) + 'c, A: Allocator> RxEdgeImpl<'c, F, A> {
     pub(crate) fn new(input_backwards_offsets: Vec<usize>, num_outputs: usize, compute: F) -> Self {
         let num_inputs = input_backwards_offsets.len();
         Self {
@@ -216,16 +220,16 @@ impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'
     }
 }
 
-impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'c>>) + 'c> RxEdgeTrait for RxEdgeImpl<'c, F> {
-    fn recompute<'c2>(&mut self, index: usize, before: &[RxDAGElem<'c2>], after: &[RxDAGElem<'c2>], graph_id: RxDAGUid<'c2>) {
+impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c, A>, &mut dyn Iterator<Item=&Rx<'c, A>>) + 'c, A: Allocator> RxEdgeTrait<A> for RxEdgeImpl<'c, F, A> {
+    fn recompute<'c2>(&mut self, index: usize, before: &[RxDAGElem<'c2, A>], after: &[RxDAGElem<'c2, A>], graph_id: RxDAGUid<'c2, A>) {
         // 'c2 must outlive 'c, this is a workaround because there aren't covariant trait lifetime parameters
         let (before, after, graph_id) = unsafe {
-            transmute::<(&[RxDAGElem<'c2>], &[RxDAGElem<'c2>], RxDAGUid<'c2>), (&[RxDAGElem<'c>], &[RxDAGElem<'c>], RxDAGUid<'c>)>((before, after, graph_id))
+            transmute::<(&[RxDAGElem<'c2, A>], &[RxDAGElem<'c2, A>], RxDAGUid<'c2, A>), (&[RxDAGElem<'c, A>], &[RxDAGElem<'c, A>], RxDAGUid<'c, A>)>((before, after, graph_id))
         };
 
         debug_assert!(self.cached_inputs.is_empty());
         self.input_backwards_offsets.iter().copied().map(|offset| {
-            before[before.len() - offset].as_node().expect("broken RxDAG: RxEdge input must be a node") as *const Rx<'c>
+            before[before.len() - offset].as_node().expect("broken RxDAG: RxEdge input must be a node") as *const Rx<'c, A>
         }).collect_into(&mut self.cached_inputs);
         let mut inputs = self.cached_inputs.iter().map(|x| unsafe { &**x });
 
@@ -245,7 +249,7 @@ impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'
     }
 }
 
-impl<'c> dyn RxTrait + 'c {
+impl<'c, A: Allocator> dyn RxTrait<A> + 'c {
     pub(crate) unsafe fn set_dyn<T>(&self, value: T) {
         debug_assert_eq!(size_of::<*const T>(), size_of::<*const ()>(), "won't work");
         let mut value = MaybeUninit::new(value);
@@ -265,7 +269,7 @@ impl<'c> dyn RxTrait + 'c {
     }
 }
 
-impl<T> Debug for RxImpl<T> {
+impl<T, A: Allocator> Debug for RxImpl<T, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RxImpl")
             .field("next.is_some()", &unsafe { &*self.next.as_ptr() }.is_some())
@@ -275,7 +279,7 @@ impl<T> Debug for RxImpl<T> {
     }
 }
 
-impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c>, &mut dyn Iterator<Item=&Rx<'c>>) + 'c> Debug for RxEdgeImpl<'c, F> {
+impl<'c, F: FnMut(&mut Vec<usize>, RxInput<'_, 'c, A>, &mut dyn Iterator<Item=&Rx<'c, A>>) + 'c, A: Allocator> Debug for RxEdgeImpl<'c, F, A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RxEdgeImpl")
             .field("num_outputs", &self.num_outputs)

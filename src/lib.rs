@@ -6,6 +6,7 @@
 #![feature(cell_update)]
 #![feature(unboxed_closures)]
 #![feature(fn_traits)]
+#![feature(allocator_api)]
 
 //! `Rx` means "reactive value" (or "reactive X"). It is a wrapper for a value which changes,
 //! and these changes trigger dependencies to re-run and change themselves.
