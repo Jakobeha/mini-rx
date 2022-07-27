@@ -106,13 +106,13 @@ impl<'c, T, A: Allocator> RxRef<'c, T, A> {
 
     /// Construct a (typed) [RxRef] from an [UntypedRxRef].
     /// You are responsible for ensuring that it came from `RxRef<T>::raw`, where `T` is the correct type.
-    unsafe fn from_raw(raw: UntypedRxRef<'c, A>) -> Self {
+    pub unsafe fn from_raw(raw: UntypedRxRef<'c, A>) -> Self {
         RxRef(raw, PhantomData)
     }
 
     /// Get the [RxRef] from this [Var].
     /// This is safe because you can't interact with the [UntypedRxRef]'s untyped values directly.
-    fn raw(self) -> UntypedRxRef<'c, A> {
+    pub fn raw(self) -> UntypedRxRef<'c, A> {
         self.0
     }
 
@@ -154,12 +154,12 @@ impl<'c, T, A: Allocator> Var<'c, T, A> {
 
     /// Construct a [Var] from an [RxRef].
     /// You are responsible for ensuring that it came from [Var::raw] and not [CRx::raw].
-    unsafe fn from_raw(raw: RxRef<'c, T, A>) -> Self {
+    pub unsafe fn from_raw(raw: RxRef<'c, T, A>) -> Self {
         Var(raw)
     }
 
     /// Get the [RxRef] from this [Var].
-    fn raw(self) -> RxRef<'c, T, A> {
+    pub fn raw(self) -> RxRef<'c, T, A> {
         self.0
     }
 
@@ -215,12 +215,12 @@ impl<'c, T, A: Allocator> CRx<'c, T, A> {
 
     /// Construct a [CRx] from an [RxRef].
     /// You are responsible for ensuring that it came from [CRx::raw] and not [Var::raw].
-    unsafe fn from_raw(raw: RxRef<'c, T, A>) -> Self {
+    pub unsafe fn from_raw(raw: RxRef<'c, T, A>) -> Self {
         CRx(raw)
     }
 
     /// Get the [UntypedRxRef] from this [CRx]. This is safe because you can't interact with the [UntypedRxRef] directly.
-    fn raw(self) -> RxRef<'c, T, A> {
+    pub fn raw(self) -> RxRef<'c, T, A> {
         self.0
     }
 
